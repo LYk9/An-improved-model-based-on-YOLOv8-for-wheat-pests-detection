@@ -1,0 +1,45 @@
+nc: 80  # number of classes
+scales: # model compound scaling constants, i.e. 'model=yolov8n.yaml' will call yolov8.yaml with scale 'n'
+  # [depth, width, max_channels]
+  n: [0.33, 0.25, 1024]  # YOLOv8n summary: 225 layers,  3157200 parameters,  3157184 gradients,   8.9 GFLOPs
+  s: [0.33, 0.50, 1024]  # YOLOv8s summary: 225 layers, 11166560 parameters, 11166544 gradients,  28.8 GFLOPs
+  m: [0.67, 0.75, 768]   # YOLOv8m summary: 295 layers, 25902640 parameters, 25902624 gradients,  79.3 GFLOPs
+  l: [1.00, 1.00, 512]   # YOLOv8l summary: 365 layers, 43691520 parameters, 43691504 gradients, 165.7 GFLOPs
+  x: [1.00, 1.25, 512]   # YOLOv8x summary: 365 layers, 68229648 parameters, 68229632 gradients, 258.5 GFLOPs
+
+# YOLOv8.0n backbone
+backbone:
+  # [from, repeats, module, args] [输入，重复次数，名称，本层参数]  640*640*3
+  - [-1, 1, Conv, [64, 3, 2]]  # 0-P1/2  64:输出通道数  3:kernel size  2：stride  不指定时:p=k//2 尺寸：f_out = ((f_in - k + 2*p ) / s ) 向下取整 +1  320*320*64
+  - [-1, 1, Conv, [128, 3, 2]]  # 1-P2/4 160*160*128
+  - [-1, 3, C2f, [128, True]]     # 特征图尺寸不变
+  - [-1, 1, Conv, [256, 3, 2]]  # 3-P3/8 80*80*256
+  - [-1, 6, C2f, [256, True]]
+  - [-1, 1, Conv, [512, 3, 2]]  # 5-P4/16 40*40*512
+  - [-1, 6, C2f, [512, True]]
+  - [-1, 1, Conv, [1024, 3, 2]]  # 7-P5/32 20*20*1024
+  - [-1, 3, C2f, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]]  # 9 concat 快速空间金字塔池化层（SPPF）。1024输出通道数，5池化核大小k。concat得到的特征图尺寸是20*20*（512*4），Conv得到20*20*1024。
+
+# YOLOv8.0n head
+head:
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']] # 40*40*1024
+  - [[-1, 6], 1, contextguideFPN, []]  # cat backbone P4 上层的输出尺寸是40*40*1024，第6层的输出是40*40*512，最终本层的输出尺寸为40*40*1536
+  - [-1, 3, C2f, [512]]  # 12 40*40*512
+
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']] # 80*80*512
+  - [[-1, 4], 1, contextguideFPN, []]  # cat backbone P3 上层的输出尺寸是80*80*512，第6层的输出是80*80*256，最终本层的输出尺寸为80*80*768
+  - [-1, 3, C2f, [256]]  # 15 (P3/8-small) 80*80*256
+  - [-1, 1, EMA, [8]]  #16    8 为分组因子，代表传入进来的通道被分成几组处理
+
+  - [15, 1, Conv, [256, 3, 2]] # 40*40*256（卷积的参数都没变，所以都是长宽变成原来的1/2，和之前一样）
+  - [[-1, 12], 1, contextguideFPN, []]  # cat head P4 上层的输出尺寸是40*40*256，第12层的输出是40*40*512，最终本层的输出尺寸为40*40*768
+  - [-1, 3, C2f, [512]]  # 19 (P4/16-medium) 40*40*512
+  - [-1, 1, EMA, [8]]  #20    8 为分组因子，代表传入进来的通道被分成几组处理
+
+  - [19, 1, Conv, [512, 3, 2]] # 20*20*512
+  - [[-1, 9], 1, contextguideFPN, []]  # cat head P5 20*20*512 + 20*20*1024
+  - [-1, 3, C2f, [1024]]  # 23 (P5/32-large) 20*20*1024
+  - [-1, 1, EMA, [8]]  #24    8 为分组因子，代表传入进来的通道被分成几组处理
+
+  - [[16, 20, 24], 1, Detect, [nc]]  # Detect(P3, P4, P5)
